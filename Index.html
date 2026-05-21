@@ -397,16 +397,14 @@ const SUPABASE_KEY = 'sb_publishable_dgeCIBIpEPf7qBrRizzwfQ_igTLzVyu';
 // ── State ──
 let currentTeamId   = null;
 let currentTeamName = null;
-let currentSession  = null;
 let players = [], games = [];
 
 // ── Supabase helpers ──
 // ── Generic REST helper (for data tables) ──
 async function sbFetch(path, opts = {}) {
-  const token = currentSession?.access_token || SUPABASE_KEY;
   const headers = {
     apikey: SUPABASE_KEY,
-    Authorization: `Bearer ${token}`,
+    Authorization: `Bearer ${SUPABASE_KEY}`,
     'Content-Type': 'application/json',
   };
   if (opts.prefer) headers['Prefer'] = opts.prefer;
@@ -454,11 +452,22 @@ async function doLogin() {
   const btn = document.getElementById('loginBtn');
   btn.disabled=true; btn.textContent='Signing in…';
   try {
-    const data = await sbAuth('/auth/v1/token?grant_type=password', {email, password:pass});
-    currentSession = data;
-    await checkTeamAndLaunch(email);
+    const hashed = await hashPass(pass);
+    const rows = await sbGet('teams', `email=eq.${encodeURIComponent(email)}&select=*`);
+    if (!rows || !rows.length) {
+      showAuthMsg('login','No account found with that email.','error');
+      btn.disabled=false; btn.textContent='Sign In'; return;
+    }
+    const team = rows[0];
+    if (team.password_hash !== hashed) {
+      showAuthMsg('login','Incorrect password.','error');
+      btn.disabled=false; btn.textContent='Sign In'; return;
+    }
+    currentTeamId   = team.id;
+    currentTeamName = team.name;
+    launchApp();
   } catch(e) {
-    showAuthMsg('login','Incorrect email or password.','error');
+    showAuthMsg('login','Error: '+e.message,'error');
   }
   btn.disabled=false; btn.textContent='Sign In';
 }
@@ -470,61 +479,36 @@ async function doSignup() {
   const pass2 = document.getElementById('signupPass2').value;
   if (!team||!email||!pass) return showAuthMsg('signup','Please fill in all fields','error');
   if (pass!==pass2) return showAuthMsg('signup','Passwords do not match','error');
-  if (pass.length<8) return showAuthMsg('signup','Password must be at least 8 characters','error');
+  if (pass.length<6) return showAuthMsg('signup','Password must be at least 6 characters','error');
   const btn = document.getElementById('signupBtn');
   btn.disabled=true; btn.textContent='Creating…';
   try {
-    // Step 1: create Supabase auth user
-    const data = await sbAuth('/auth/v1/signup', {email, password:pass});
-    // data.session is null until email confirmed — but we don't need it yet
-    // Step 2: sign in immediately to get a real session
-    const session = await sbAuth('/auth/v1/token?grant_type=password', {email, password:pass});
-    currentSession = session;
-    // Step 3: create the team row
-    await sbPost('teams', { name:team, email, approved:true });
-    // Step 4: launch the app
-    await checkTeamAndLaunch(email);
-  } catch(e) {
-    let msg = 'Error creating account. Please try again.';
-    if (e.message.includes('already registered') || e.message.includes('already exists')) {
-      msg = 'An account with that email already exists. Try signing in instead.';
-    } else if (e.message.includes('password')) {
-      msg = 'Password must be at least 6 characters.';
+    // Check email not already taken
+    const existing = await sbGet('teams', `email=eq.${encodeURIComponent(email)}&select=id`);
+    if (existing && existing.length) {
+      showAuthMsg('signup','An account with that email already exists.','error');
+      btn.disabled=false; btn.textContent='Create Team Account'; return;
     }
-    showAuthMsg('signup', msg, 'error');
+    const hashed = await hashPass(pass);
+    const rows = await sbPost('teams', { name:team, email, password_hash:hashed, approved:true });
+    const newTeam = Array.isArray(rows) ? rows[0] : rows;
+    currentTeamId   = newTeam.id;
+    currentTeamName = newTeam.name;
+    launchApp();
+  } catch(e) {
+    showAuthMsg('signup','Error creating account: '+e.message,'error');
     console.error('Signup error:', e.message);
   }
   btn.disabled=false; btn.textContent='Create Team Account';
 }
 
-async function checkTeamAndLaunch(email) {
-  try {
-    const rows = await sbGet('teams', `email=eq.${encodeURIComponent(email)}&select=*`);
-    if (!rows || !rows.length) {
-      showAuthMsg('login','No team found for this email.','error'); return;
-    }
-    const team = rows[0];
-    if (!team.approved) { showPendingScreen(team.name); return; }
-    currentTeamId   = team.id;
-    currentTeamName = team.name;
-    launchApp();
-  } catch(e) {
-    showAuthMsg('login','Error loading team: '+e.message,'error');
-  }
-}
+// checkTeamAndLaunch no longer needed — login handles it inline
 
-async function doSignOut() {
-  try {
-    await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
-      method:'POST',
-      headers:{ apikey: SUPABASE_KEY, Authorization: `Bearer ${currentSession?.access_token||''}` }
-    });
-  } catch(e){}
-  currentSession=null; currentTeamId=null; currentTeamName=null;
+function doSignOut() {
+  currentTeamId=null; currentTeamName=null;
   players=[]; games=[];
-  document.getElementById('appShell').style.display     = 'none';
-  document.getElementById('pendingScreen').style.display= 'none';
-  document.getElementById('authScreen').style.display   = 'flex';
+  document.getElementById('appShell').style.display   = 'none';
+  document.getElementById('authScreen').style.display = 'flex';
 }
 
 function showPendingScreen(teamName) {
