@@ -401,27 +401,44 @@ let currentSession  = null;
 let players = [], games = [];
 
 // ── Supabase helpers ──
+// ── Generic REST helper (for data tables) ──
 async function sbFetch(path, opts = {}) {
   const token = currentSession?.access_token || SUPABASE_KEY;
+  const headers = {
+    apikey: SUPABASE_KEY,
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
+  if (opts.prefer) headers['Prefer'] = opts.prefer;
   const res = await fetch(`${SUPABASE_URL}${path}`, {
-    ...opts,
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      Prefer: opts.prefer || '',
-      ...(opts.headers || {}),
-    },
+    method: opts.method || 'GET',
+    headers,
+    body: opts.body || undefined,
   });
   const text = await res.text();
   if (!res.ok) throw new Error(text);
   return text ? JSON.parse(text) : null;
 }
 
-const sbGet  = (table, qs='')  => sbFetch(`/rest/v1/${table}?${qs}`);
-const sbPost = (table, body)   => sbFetch(`/rest/v1/${table}`, { method:'POST', body:JSON.stringify(body), prefer:'return=representation' });
-const sbPatch= (table, qs, b)  => sbFetch(`/rest/v1/${table}?${qs}`, { method:'PATCH', body:JSON.stringify(b), prefer:'return=representation' });
-const sbDel  = (table, qs)     => sbFetch(`/rest/v1/${table}?${qs}`, { method:'DELETE' });
+// ── Auth helper (clean, no extra headers) ──
+async function sbAuth(path, body) {
+  const res = await fetch(`${SUPABASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(text);
+  return text ? JSON.parse(text) : null;
+}
+
+const sbGet  = (table, qs='') => sbFetch(`/rest/v1/${table}?${qs}`);
+const sbPost = (table, body)  => sbFetch(`/rest/v1/${table}`, { method:'POST', body:JSON.stringify(body), prefer:'return=representation' });
+const sbPatch= (table, qs, b) => sbFetch(`/rest/v1/${table}?${qs}`, { method:'PATCH', body:JSON.stringify(b), prefer:'return=representation' });
+const sbDel  = (table, qs)    => sbFetch(`/rest/v1/${table}?${qs}`, { method:'DELETE' });
 
 // ── Auth ──
 function switchAuthTab(tab) {
@@ -437,10 +454,7 @@ async function doLogin() {
   const btn = document.getElementById('loginBtn');
   btn.disabled=true; btn.textContent='Signing in…';
   try {
-    const data = await sbFetch('/auth/v1/token?grant_type=password', {
-      method:'POST', body:JSON.stringify({email, password:pass}),
-      headers:{'Content-Type':'application/json'}
-    });
+    const data = await sbAuth('/auth/v1/token?grant_type=password', {email, password:pass});
     currentSession = data;
     await checkTeamAndLaunch(email);
   } catch(e) {
@@ -460,22 +474,25 @@ async function doSignup() {
   const btn = document.getElementById('signupBtn');
   btn.disabled=true; btn.textContent='Creating…';
   try {
-    // Create auth user
-    const data = await sbFetch('/auth/v1/signup', {
-      method:'POST', body:JSON.stringify({email, password:pass}),
-      headers:{'Content-Type':'application/json'}
-    });
-    currentSession = data.session || data;
-    // Create team record (approved=false)
+    // Step 1: create Supabase auth user
+    const data = await sbAuth('/auth/v1/signup', {email, password:pass});
+    // data.session is null until email confirmed — but we don't need it yet
+    // Step 2: sign in immediately to get a real session
+    const session = await sbAuth('/auth/v1/token?grant_type=password', {email, password:pass});
+    currentSession = session;
+    // Step 3: create the team row
     await sbPost('teams', { name:team, email, approved:true });
-    // Auto-approved — sign in immediately
-    currentSession = data.session || data;
+    // Step 4: launch the app
     await checkTeamAndLaunch(email);
   } catch(e) {
-    const msg = e.message.includes('already')
-      ? 'An account with that email already exists.'
-      : 'Error creating account. Please try again.';
+    let msg = 'Error creating account. Please try again.';
+    if (e.message.includes('already registered') || e.message.includes('already exists')) {
+      msg = 'An account with that email already exists. Try signing in instead.';
+    } else if (e.message.includes('password')) {
+      msg = 'Password must be at least 6 characters.';
+    }
     showAuthMsg('signup', msg, 'error');
+    console.error('Signup error:', e.message);
   }
   btn.disabled=false; btn.textContent='Create Team Account';
 }
@@ -497,7 +514,12 @@ async function checkTeamAndLaunch(email) {
 }
 
 async function doSignOut() {
-  try { await sbFetch('/auth/v1/logout', {method:'POST'}); } catch(e){}
+  try {
+    await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+      method:'POST',
+      headers:{ apikey: SUPABASE_KEY, Authorization: `Bearer ${currentSession?.access_token||''}` }
+    });
+  } catch(e){}
   currentSession=null; currentTeamId=null; currentTeamName=null;
   players=[]; games=[];
   document.getElementById('appShell').style.display     = 'none';
