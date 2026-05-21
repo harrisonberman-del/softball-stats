@@ -1047,4 +1047,8 @@ function showPage(id){
 function renderAll(){renderLeaders();renderRoster();renderLogPage();renderGamesPage();}
 function startLoad(){const b=document.getElementById('loadingBar');b.className='loading-bar active';}
 function endLoad(){const b=document.getElementById('loadingBar');b.className='loading-bar done';setTimeout(()=>b.className='loading-bar',600);}
-function showToast(m,err=false){const t=document.getElementById('toast');t.
+function showToast(m,err=false){const t=document.getElementById('toast');t.textContent=m;t.className='toast'+(err?' err':'');t.style.display='block';setTimeout(()=>t.style.display='none',2800);}
+function esc(s){return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}
+</script>
+</body>
+</html>
