@@ -438,6 +438,12 @@ const sbPost = (table, body)  => sbFetch(`/rest/v1/${table}`, { method:'POST', b
 const sbPatch= (table, qs, b) => sbFetch(`/rest/v1/${table}?${qs}`, { method:'PATCH', body:JSON.stringify(b), prefer:'return=representation' });
 const sbDel  = (table, qs)    => sbFetch(`/rest/v1/${table}?${qs}`, { method:'DELETE' });
 
+// ── Simple password hashing ──
+async function hashPass(pass) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pass));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
 // ── Auth ──
 function switchAuthTab(tab) {
   document.getElementById('loginForm').style.display  = tab==='login'  ? 'block' : 'none';
